@@ -6,6 +6,7 @@ const { types } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 types.setTypeParser(1082, val => val); // DATE型を文字列のまま返す
+types.setTypeParser(1700, val => parseFloat(val)); // NUMERIC型を数値で返す
 
 const app = express();
 app.use(express.json());
