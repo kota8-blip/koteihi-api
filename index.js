@@ -35,6 +35,9 @@ const pool = new Pool(
       }
 );
 
+// DB migration: stripe_customer_id列を追加
+pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT').catch(() => {});
+
 // ===== Stripe Webhook (express.json()より前に置く必要あり) =====
 app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const sig = req.headers['stripe-signature'];
@@ -47,7 +50,16 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     const userId = session.metadata.userId;
-    await pool.query('UPDATE users SET is_premium = true WHERE id = $1', [userId]);
+    await pool.query(
+      'UPDATE users SET is_premium = true, stripe_customer_id = $2 WHERE id = $1',
+      [userId, session.customer]
+    );
+  } else if (event.type === 'customer.subscription.deleted') {
+    const customerId = event.data.object.customer;
+    await pool.query(
+      'UPDATE users SET is_premium = false WHERE stripe_customer_id = $1',
+      [customerId]
+    );
   }
   res.json({ received: true });
 });
@@ -76,7 +88,10 @@ app.post('/api/verify-payment', authenticateToken, async (req, res) => {
   try {
     const session = await getStripe().checkout.sessions.retrieve(sessionId);
     if (session.payment_status === 'paid' && session.metadata.userId === req.user.userId.toString()) {
-      await pool.query('UPDATE users SET is_premium = true WHERE id = $1', [req.user.userId]);
+      await pool.query(
+        'UPDATE users SET is_premium = true, stripe_customer_id = $2 WHERE id = $1',
+        [req.user.userId, session.customer]
+      );
       const newToken = jwt.sign(
         { userId: req.user.userId, isPremium: true },
         process.env.JWT_SECRET,
@@ -86,6 +101,22 @@ app.post('/api/verify-payment', authenticateToken, async (req, res) => {
     } else {
       res.status(400).json({ error: '支払いが確認できませんでした' });
     }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== Stripe カスタマーポータル =====
+app.post('/api/create-portal-session', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT stripe_customer_id FROM users WHERE id = $1', [req.user.userId]);
+    const customerId = result.rows[0]?.stripe_customer_id;
+    if (!customerId) return res.status(400).json({ error: 'サブスク情報が見つかりません' });
+    const session = await getStripe().billingPortal.sessions.create({
+      customer: customerId,
+      return_url: `${process.env.FRONTEND_URL}/settings`,
+    });
+    res.json({ url: session.url });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
