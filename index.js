@@ -5,7 +5,17 @@ const cors = require('cors');
 const { types } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
+// 起動時クラッシュを防ぐため遅延初期化
+let _stripe = null;
+function getStripe() {
+  if (!_stripe) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) throw new Error('STRIPE_SECRET_KEY が設定されていません');
+    _stripe = require('stripe')(key);
+  }
+  return _stripe;
+}
 
 types.setTypeParser(1082, val => val);
 types.setTypeParser(1700, val => parseFloat(val));
@@ -30,7 +40,7 @@ app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, 
   const sig = req.headers['stripe-signature'];
   let event;
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    event = getStripe().webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
@@ -47,7 +57,7 @@ app.use(express.json());
 // ===== Stripe Checkout =====
 app.post('/api/create-checkout-session', authenticateToken, async (req, res) => {
   try {
-    const session = await stripe.checkout.sessions.create({
+    const session = await getStripe().checkout.sessions.create({
       payment_method_types: ['card'],
       line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
       mode: 'subscription',
@@ -64,7 +74,7 @@ app.post('/api/create-checkout-session', authenticateToken, async (req, res) => 
 app.post('/api/verify-payment', authenticateToken, async (req, res) => {
   const { sessionId } = req.body;
   try {
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const session = await getStripe().checkout.sessions.retrieve(sessionId);
     if (session.payment_status === 'paid' && session.metadata.userId === req.user.userId.toString()) {
       await pool.query('UPDATE users SET is_premium = true WHERE id = $1', [req.user.userId]);
       const newToken = jwt.sign(
