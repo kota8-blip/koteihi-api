@@ -35,8 +35,10 @@ const pool = new Pool(
       }
 );
 
-// DB migration: stripe_customer_id列を追加
+// DB migration
 pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT').catch(() => {});
+pool.query('ALTER TABLE fixed_costs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()').catch(() => {});
+pool.query('ALTER TABLE fixed_costs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ DEFAULT NULL').catch(() => {});
 
 // ===== Stripe Webhook (express.json()より前に置く必要あり) =====
 app.post('/api/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -160,7 +162,34 @@ app.put('/api/transactions/:id', authenticateToken, async (req, res) => {
 // ===== fixed_costs =====
 app.get('/api/fixed-costs', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
-  const result = await pool.query('SELECT * FROM fixed_costs WHERE user_id = $1 ORDER BY billing_day ASC', [userId]);
+  const result = await pool.query(
+    'SELECT * FROM fixed_costs WHERE user_id = $1 AND deleted_at IS NULL ORDER BY billing_day ASC',
+    [userId]
+  );
+  res.json(result.rows);
+});
+
+app.get('/api/fixed-costs/history', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const result = await pool.query(`
+    WITH months AS (
+      SELECT generate_series(
+        date_trunc('month', COALESCE((SELECT MIN(created_at) FROM fixed_costs WHERE user_id = $1), NOW())),
+        date_trunc('month', NOW()),
+        interval '1 month'
+      ) AS month
+    )
+    SELECT
+      to_char(m.month, 'YYYY-MM') AS month,
+      COALESCE(SUM(fc.amount), 0) AS total
+    FROM months m
+    LEFT JOIN fixed_costs fc ON
+      fc.user_id = $1 AND
+      date_trunc('month', fc.created_at) <= m.month AND
+      (fc.deleted_at IS NULL OR date_trunc('month', fc.deleted_at) > m.month)
+    GROUP BY m.month
+    ORDER BY m.month
+  `, [userId]);
   res.json(result.rows);
 });
 
@@ -177,7 +206,10 @@ app.post('/api/fixed-costs', authenticateToken, async (req, res) => {
 app.delete('/api/fixed-costs/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const userId = req.user.userId;
-  await pool.query('DELETE FROM fixed_costs WHERE id = $1 AND user_id = $2', [id, userId]);
+  await pool.query(
+    'UPDATE fixed_costs SET deleted_at = NOW() WHERE id = $1 AND user_id = $2',
+    [id, userId]
+  );
   res.sendStatus(204);
 });
 
