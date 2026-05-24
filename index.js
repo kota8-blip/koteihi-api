@@ -76,7 +76,7 @@ app.post('/api/create-checkout-session', authenticateToken, async (req, res) => 
       line_items: [{ price: process.env.STRIPE_PRICE_ID, quantity: 1 }],
       mode: 'subscription',
       success_url: `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.FRONTEND_URL}/`,
+      cancel_url: `${process.env.FRONTEND_URL}${req.body.cancelPath || '/'}`,
       metadata: { userId: req.user.userId.toString() },
     });
     res.json({ url: session.url });
