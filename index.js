@@ -169,6 +169,15 @@ app.get('/api/fixed-costs', authenticateToken, async (req, res) => {
   res.json(result.rows);
 });
 
+app.get('/api/fixed-costs/history-detail', authenticateToken, async (req, res) => {
+  const userId = req.user.userId;
+  const result = await pool.query(
+    'SELECT * FROM fixed_costs WHERE user_id = $1 ORDER BY created_at ASC',
+    [userId]
+  );
+  res.json(result.rows);
+});
+
 app.get('/api/fixed-costs/history', authenticateToken, async (req, res) => {
   const userId = req.user.userId;
   const result = await pool.query(`
