@@ -236,12 +236,18 @@ app.put('/api/fixed-costs/:id', authenticateToken, async (req, res) => {
 // ===== auth =====
 app.post('/api/register', async (req, res) => {
   const { username, password } = req.body;
+  const existing = await pool.query('SELECT id FROM users WHERE username = $1', [username]);
+  if (existing.rows.length > 0) {
+    return res.status(400).json({ error: 'このユーザー名はすでに使われています' });
+  }
   const hashedPassword = await bcrypt.hash(password, 10);
   const result = await pool.query(
     'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING *',
     [username, hashedPassword]
   );
-  res.json(result.rows[0]);
+  const user = result.rows[0];
+  const token = jwt.sign({ userId: user.id, isPremium: user.is_premium }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  res.json({ token, isPremium: user.is_premium });
 });
 
 app.post('/api/login', async (req, res) => {
