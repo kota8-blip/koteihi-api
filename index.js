@@ -205,6 +205,16 @@ app.get('/api/fixed-costs/history', authenticateToken, async (req, res) => {
 app.post('/api/fixed-costs', authenticateToken, async (req, res) => {
   const { name, amount, category, billing_day, memo } = req.body;
   const userId = req.user.userId;
+  const isPremium = req.user.isPremium;
+  if (!isPremium) {
+    const countResult = await pool.query(
+      'SELECT COUNT(*) FROM fixed_costs WHERE user_id = $1 AND deleted_at IS NULL',
+      [userId]
+    );
+    if (parseInt(countResult.rows[0].count) >= 5) {
+      return res.status(403).json({ error: '無料プランでは固定費を5件まで登録できます。' });
+    }
+  }
   const result = await pool.query(
     'INSERT INTO fixed_costs (name, amount, category, billing_day, memo, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
     [name, amount, category, (billing_day !== '' && billing_day != null) ? billing_day : null, memo || null, userId]
